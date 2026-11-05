@@ -1,9 +1,13 @@
 name: Collect deck status
 
+# GitHub skips most short scheduled runs, so instead each run stays alive
+# for almost 6 hours and reads the decks every 10 minutes itself.
+# A new run is queued every 2 hours, so the next one starts as soon as
+# the current one ends.
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 minutes (GitHub may delay runs by a few minutes)
-  workflow_dispatch:          # adds a "Run workflow" button for manual tests
+    - cron: "7 */2 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,24 +19,28 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    timeout-minutes: 355
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install requests
 
-      - name: Run collector
-        run: python collector.py
-
-      - name: Commit new data
+      - name: Read decks every 10 minutes for about 5h40m
         run: |
           git config user.name "deck-tracker-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/deck_status.csv
-          git diff --cached --quiet || git commit -m "Add deck status reading"
-          git pull --rebase
-          git push
+          end=$((SECONDS + 340*60))
+          while [ $SECONDS -lt $end ]; do
+            python collector.py || echo "collector failed, trying again next round"
+            git add data/deck_status.csv
+            if ! git diff --cached --quiet; then
+              git commit -q -m "Add deck status reading"
+              git pull -q --rebase && git push -q || echo "push failed, will retry next round"
+            fi
+            sleep 600
+          done
